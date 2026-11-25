@@ -34,6 +34,7 @@ private val DRAWABLE_NAMES = listOf(
     "bh_bt_root",
     "bh_bt_steam_chat",
     "bh_bt_components",   // Component Manager tile (inject / list / remove PC-engine components)
+    "bh_bt_luatools",     // LuaTools Steam manager tile
 )
 
 // Sentinel for classloader access — same trick as ChangeAppIconPatch's

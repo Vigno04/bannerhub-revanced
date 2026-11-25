@@ -40,7 +40,7 @@ import java.util.Set;
  * file name; injection itself never depends on this class (the archive is
  * copied verbatim and the plugin extracts it).
  */
-final class BhTzstReader {
+public final class BhTzstReader {
 
     private static final String TAG = "BhTzstReader";
 
@@ -121,7 +121,7 @@ final class BhTzstReader {
      * The host's zstd decompressing stream over {@code raw}, or null when the
      * reflective construction fails (logged once per call site).
      */
-    static InputStream openZstd(InputStream raw) {
+    public static InputStream openZstd(InputStream raw) {
         try {
             Class<?> boundedCls = Class.forName(BOUNDED_CLS);
             Object builder = boundedCls.getMethod(BUILDER_FACTORY).invoke(null);

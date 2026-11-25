@@ -253,8 +253,9 @@ public class BhDownloadService extends Service {
         exec.submit(() -> {
             try {
                 switch (store) {
-                    case "GOG":    runGog(savedIntent, gameId, gameName);    break;
-                    default:       notifyError(gameId, "Unknown store: " + store);
+                    case "GOG":       runGog(savedIntent, gameId, gameName);      break;
+                    case "STEAM_LUA": runSteamLua(savedIntent, gameId, gameName); break;
+                    default:          notifyError(gameId, "Unknown store: " + store);
                 }
             } finally {
                 exec.shutdown();
@@ -266,6 +267,48 @@ public class BhDownloadService extends Service {
 
     // ── Epic download ─────────────────────────────────────────────────────────
 
+
+    // ── Steam LuaTools download ───────────────────────────────────────────────
+
+    private void runSteamLua(Intent intent, String gameId, String gameName) {
+        int appId = intent.getIntExtra("steam_lua_app_id", 0);
+        if (appId <= 0) {
+            notifyError(gameId, "Invalid steam_lua_app_id");
+            return;
+        }
+        int threads = intent.getIntExtra(EXTRA_THREADS, BhDownloadConfig.DEFAULT_THREADS);
+        CountDownLatch latch = new CountDownLatch(1);
+
+        Runnable cancelHandle = app.revanced.extension.gamehub.luatools.SteamCdnDownloader.startDownload(
+                this, appId, threads,
+                new app.revanced.extension.gamehub.luatools.SteamCdnDownloader.Callback() {
+                    @Override public void onProgress(String msg, int pct) {
+                        notifyProgress(gameId, msg, pct);
+                    }
+                    @Override public void onComplete(String installDir, String exePath) {
+                        notifyComplete(gameId, installDir);
+                        latch.countDown();
+                    }
+                    @Override public void onError(String msg) {
+                        notifyError(gameId, msg);
+                        latch.countDown();
+                    }
+                    @Override public void onCancelled() {
+                        notifyCancelled(gameId);
+                        latch.countDown();
+                    }
+                });
+
+        cancelHandles.put(gameId, cancelHandle);
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            notifyError(gameId, "Download interrupted");
+        } finally {
+            cancelHandles.remove(gameId);
+        }
+    }
 
     // ── GOG download ──────────────────────────────────────────────────────────
 

@@ -119,6 +119,10 @@ jobs:
           gh release download base-apk-631 \
             --pattern "GameHub_6.3.1.apk" \
             --repo ${{ github.repository }} \
+            --output GameHub_6.3.1.apk || \
+          gh release download base-apk-631 \
+            --pattern "GameHub_6.3.1.apk" \
+            --repo The412Banner/bannerhub-revanced \
             --output GameHub_6.3.1.apk
 
       - name: Stage shared artifacts

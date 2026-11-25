@@ -84,6 +84,7 @@ public final class BhBannerToolsMenuRowClick implements Function1<Object, Object
         "Overlay",
         "Root",
         "Components",
+        "LuaTools",
     };
     private static final String[] TILE_DRAWABLES = new String[] {
         "bh_bt_vibration",
@@ -93,6 +94,7 @@ public final class BhBannerToolsMenuRowClick implements Function1<Object, Object
         "bh_bt_overlay",
         "bh_bt_root",
         "bh_bt_components",
+        "bh_bt_luatools",
     };
 
     // Tile indices that act on the CURRENT GAME (need a gameId in scope).
@@ -311,6 +313,16 @@ public final class BhBannerToolsMenuRowClick implements Function1<Object, Object
                     // Component Manager Activity (registered by
                     // componentManagerManifestPatch); global like GOG.
                     com.xj.winemu.components.BhComponentsMenu.open(host);
+                    break;
+                case 7:
+                    try {
+                        Class<?> cls = Class.forName("app.revanced.extension.gamehub.luatools.BhLuaGamesActivity");
+                        android.content.Intent intent = new android.content.Intent(host, cls);
+                        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                        host.startActivity(intent);
+                    } catch (Throwable t) {
+                        Log.w(TAG, "LuaTools activity open failed", t);
+                    }
                     break;
                 default:
                     Log.w(TAG, "unknown dialog item index " + which);
