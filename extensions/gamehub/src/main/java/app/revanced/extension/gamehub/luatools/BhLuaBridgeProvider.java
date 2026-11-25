@@ -1,8 +1,13 @@
 package app.revanced.extension.gamehub.luatools;
 
 import android.app.ActivityManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 
@@ -61,10 +66,40 @@ public class BhLuaBridgeProvider extends LuaToolsBridgeProvider {
             if (installed) {
                 LuaToolsSteamEmu.attachGameRuntime(ctx, appId, installDir);
                 BhLuaLibraryHelper.registerInLibrary(ctx, appId, name, fullExe, cover);
+            } else {
+                postPushedNotification(ctx, appId, name);
             }
         } catch (Throwable t) {
             Log.w(TAG, "onGameAdded warning", t);
         }
+    }
+
+    private static void postPushedNotification(Context ctx, int appId, String name) {
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel ch = new NotificationChannel(
+                        "bh_downloads", "BannerHub Downloads", NotificationManager.IMPORTANCE_DEFAULT);
+                nm.createNotificationChannel(ch);
+            }
+            Intent openIntent = new Intent(ctx, BhLuaGamesActivity.class);
+            openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            PendingIntent pi = PendingIntent.getActivity(
+                    ctx,
+                    9200 + (appId % 1000),
+                    openIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            Notification.Builder b = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    ? new Notification.Builder(ctx, "bh_downloads")
+                    : new Notification.Builder(ctx);
+            b.setSmallIcon(android.R.drawable.stat_sys_download_done)
+                    .setContentTitle("LuaTools: " + (name != null && !name.isEmpty() ? name : ("AppID " + appId)))
+                    .setContentText("Ready in Explore → LuaTools — tap to download")
+                    .setContentIntent(pi)
+                    .setAutoCancel(true);
+            nm.notify(9200 + (appId % 1000), b.build());
+        } catch (Throwable ignored) {}
     }
 
     @Override
@@ -86,6 +121,8 @@ public class BhLuaBridgeProvider extends LuaToolsBridgeProvider {
         switch (method) {
             case "ping": {
                 Bundle res = super.call(method, arg, extras);
+                res.putString("platform_id", "bannerhub_v6");
+                res.putString("base_version", "6.3.1");
                 res.putBoolean("supports_mt_provider", true);
                 res.putString(
                         "mt_authority",

@@ -79,7 +79,8 @@ public final class BhExploreManifest {
 
         // ── Stores rail (real bundled GOG logo) ──────────────
         + "{\"title\":\"Your stores\",\"type\":\"shortcuts\",\"cards\":["
-        +   "{\"label\":\"GOG\",\"subtitle\":\"Sign in & browse your library\",\"action\":\"gog\",\"icon\":\"bh_explore_gog\"}"
+        +   "{\"label\":\"GOG\",\"subtitle\":\"Sign in & browse your library\",\"action\":\"gog\",\"icon\":\"bh_explore_gog\"},"
+        +   "{\"label\":\"LuaTools\",\"subtitle\":\"Steam games & CloudRedirect\",\"action\":\"luatools\",\"icon\":\"bh_bt_luatools\"}"
         + "]}"
 
         + "]}";
@@ -151,7 +152,7 @@ public final class BhExploreManifest {
      * cached locally so it's instant + offline-safe afterwards.
      */
     private static final String REMOTE_URL =
-        "https://github.com/The412Banner/bannerhub-revanced/releases/latest/download/bh_explore.json";
+        "https://github.com/Vigno04/bannerhub-revanced/releases/latest/download/bh_explore.json";
     private static final String CACHE_NAME = "bh_explore_cache.json";
 
     // ── Version / update detection ────────────────────────────────────────────
@@ -317,7 +318,35 @@ public final class BhExploreManifest {
             }
             if (!cards.isEmpty()) rails.add(new Rail(type, title, cards));
         }
+        ensureLuaToolsCard(rails);
         return rails;
+    }
+
+    private static void ensureLuaToolsCard(List<Rail> rails) {
+        for (Rail r : rails) {
+            if ("shortcuts".equals(r.type)) {
+                for (Card c : r.cards) {
+                    if ("luatools".equals(c.action)) return;
+                }
+                r.cards.add(new Card(
+                    "LuaTools",
+                    "Steam games & CloudRedirect",
+                    "luatools",
+                    null,
+                    "bh_bt_luatools",
+                    null, null, null, null));
+                return;
+            }
+        }
+        List<Card> cards = new ArrayList<>();
+        cards.add(new Card(
+            "LuaTools",
+            "Steam games & CloudRedirect",
+            "luatools",
+            null,
+            "bh_bt_luatools",
+            null, null, null, null));
+        rails.add(new Rail("shortcuts", "Your stores", cards));
     }
 
     /**

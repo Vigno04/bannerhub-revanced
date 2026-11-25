@@ -68,17 +68,25 @@ val luaToolsManifestPatch = resourcePatch(
                 app.appendChild(providerEl)
             }
 
-            // 3. Register BhLuaGamesActivity
+            // 3. Register BhLuaGamesActivity (exported so LuaTools Android can open it directly)
             val hasActivity = app.getElementsByTagName("activity").asSequence()
                 .map { it as Element }
                 .any { it.getAttribute("android:name") == GAMES_ACTIVITY }
             if (!hasActivity) {
                 val actEl = dom.createElement("activity").apply {
                     setAttribute("android:name", GAMES_ACTIVITY)
-                    setAttribute("android:exported", "false")
+                    setAttribute("android:exported", "true")
                     setAttribute("android:theme", "@android:style/Theme.Black.NoTitleBar")
                     setAttribute("android:configChanges", "orientation|screenSize|keyboardHidden")
                     setAttribute("android:screenOrientation", "behind")
+                    dom.createElement("intent-filter").apply {
+                        dom.createElement("action").apply {
+                            setAttribute("android:name", "com.luatools.OPEN_LUATOOLS")
+                        }.let(this::appendChild)
+                        dom.createElement("category").apply {
+                            setAttribute("android:name", "android.intent.category.DEFAULT")
+                        }.let(this::appendChild)
+                    }.let(this::appendChild)
                 }
                 app.appendChild(actEl)
             }

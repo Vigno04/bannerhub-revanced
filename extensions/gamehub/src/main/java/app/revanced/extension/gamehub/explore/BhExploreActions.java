@@ -26,6 +26,8 @@ public final class BhExploreActions {
 
     private static final String GOG_HUB =
         "app.revanced.extension.gamehub.gog.GogMainActivity";
+    private static final String LUATOOLS_HUB =
+        "app.revanced.extension.gamehub.luatools.BhLuaGamesActivity";
 
     private BhExploreActions() { }
 
@@ -35,6 +37,9 @@ public final class BhExploreActions {
             switch (card.action) {
                 case "gog":
                     openActivity(host, GOG_HUB);
+                    break;
+                case "luatools":
+                    openActivity(host, LUATOOLS_HUB);
                     break;
                 case "bannertools":
                     // Opens the same Banner Tools dialog as the per-game menus,

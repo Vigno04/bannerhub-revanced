@@ -160,6 +160,7 @@ jobs:
         # side-by-side via different package names, same pattern as the two AnTuTu
         # variants which share "BannerHub v6 AnTuTu".
         variant:
+          - { name: V6,             pkg: "banner.hub.v6",              label: "BannerHub v6" }
           - { name: Normal,         pkg: "banner.hub",                 label: "BannerHub v6" }
           - { name: Normal-GHL,     pkg: "gamehub.lite",               label: "BannerHub v6" }
           - { name: PuBG,           pkg: "com.tencent.ig",             label: "BannerHub v6 PuBG" }
