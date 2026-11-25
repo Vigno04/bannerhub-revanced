@@ -219,6 +219,7 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
         rlp.topMargin = dp(10);
         row.setLayoutParams(rlp);
 
+        final int fCachedManifests = cachedManifests;
         if (active) {
             row.addView(makeBtn("Cancel", 0xFF7A2E35, v -> {
                 BhDownloadService.cancel(this, dlKey);
@@ -227,7 +228,7 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
         } else {
             String dlLabel = installed ? "Verify" : "Download";
             Button dlBtn = makeBtn(dlLabel, 0xFF265A8E, v -> {
-                if (cachedManifests == 0) {
+                if (fCachedManifests == 0) {
                     Toast.makeText(this, "No cached .manifest — push again from LuaTools", Toast.LENGTH_SHORT).show();
                     return;
                 }
