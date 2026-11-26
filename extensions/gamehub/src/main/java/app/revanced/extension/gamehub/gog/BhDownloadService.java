@@ -493,7 +493,7 @@ public class BhDownloadService extends Service {
         lastMsgMap.put(gameId, msg);
         lastPctMap.put(gameId, pct);
         long now = System.currentTimeMillis();
-        if (pct != lastNotifPct || (now - lastNotifUpdateMs) >= 700L) {
+        if ((now - lastNotifUpdateMs) >= 1500L) {
             lastNotifUpdateMs = now;
             lastNotifPct = pct;
             updateProgressNotif(name, msg, pct, gameId);
@@ -607,6 +607,7 @@ public class BhDownloadService extends Service {
                 .setContentText(msg)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
                 .setOngoing(true)
+                .setOnlyAlertOnce(true)
                 .setProgress(100, pct, pct == 0)
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelPI)
                 .build();

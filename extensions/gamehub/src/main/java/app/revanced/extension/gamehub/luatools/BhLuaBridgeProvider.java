@@ -65,8 +65,6 @@ public class BhLuaBridgeProvider extends LuaToolsBridgeProvider {
             BhLuaLibraryHelper.saveGameMeta(ctx, appId, name, installDir.getAbsolutePath(), fullExe, cover, installed);
             if (installed) {
                 LuaToolsSteamEmu.attachGameRuntime(ctx, appId, installDir);
-            } else {
-                postPushedNotification(ctx, appId, name);
             }
             BhLuaLibraryHelper.registerInLibrary(ctx, appId, name, fullExe, cover);
         } catch (Throwable t) {
@@ -233,7 +231,7 @@ public class BhLuaBridgeProvider extends LuaToolsBridgeProvider {
 
             @Override public void onProgress(String msg, int pct) {
                 long now = System.currentTimeMillis();
-                if (nm == null || (now - lastNotifMs < 1200L && pct < 100)) return;
+                if (nm == null || (now - lastNotifMs < 1500L && pct < 100)) return;
                 lastNotifMs = now;
                 try {
                     Notification.Builder b = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -243,6 +241,7 @@ public class BhLuaBridgeProvider extends LuaToolsBridgeProvider {
                             .setContentTitle(safeName)
                             .setContentText(msg)
                             .setProgress(100, pct, pct == 0)
+                            .setOnlyAlertOnce(true)
                             .setOngoing(true);
                     nm.notify(notifId, b.build());
                 } catch (Throwable ignored) {}
