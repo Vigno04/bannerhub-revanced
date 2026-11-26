@@ -159,6 +159,7 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
         }
         boolean installed = !exePath.isEmpty() && new File(exePath).isFile();
         boolean active = BhDownloadService.isActive(dlKey);
+        boolean queued = BhDownloadService.isQueued(dlKey);
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -189,6 +190,8 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
         if (active) {
             sub.append("\n").append(BhDownloadService.getLastMsg(dlKey))
                     .append(" (").append(BhDownloadService.getLastPct(dlKey)).append("%)");
+        } else if (queued) {
+            sub.append("\nQueued — waiting for current download");
         }
 
         TextView subTv = new TextView(this);
@@ -222,6 +225,11 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
         final int fCachedManifests = cachedManifests;
         if (active) {
             row.addView(makeBtn("Cancel", 0xFF7A2E35, v -> {
+                BhDownloadService.cancel(this, dlKey);
+                ui.postDelayed(this::refreshList, 300);
+            }));
+        } else if (queued) {
+            row.addView(makeBtn("Remove from Queue", 0xFF7A4E2E, v -> {
                 BhDownloadService.cancel(this, dlKey);
                 ui.postDelayed(this::refreshList, 300);
             }));

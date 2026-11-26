@@ -7,10 +7,15 @@ import android.util.Log;
 
 import com.luatools.javasteam.LuaToolsStore;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 /**
  * Registers, updates, and removes LuaTools-downloaded Steam games in GameHub 6.3.1's
@@ -36,7 +41,7 @@ public final class BhLuaLibraryHelper {
     private BhLuaLibraryHelper() {}
 
     public static String gameRowId(int appId) {
-        return "lua_" + appId;
+        return String.valueOf(appId);
     }
 
     public static File metaDir(Context ctx) {
@@ -104,6 +109,7 @@ public final class BhLuaLibraryHelper {
         String safeName = (name != null && !name.isEmpty()) ? name : ("AppID " + appId);
         String safeCover = (coverUrl != null && !coverUrl.isEmpty()) ? coverUrl : steamCapsuleUrl(appId);
         String rowId = gameRowId(appId);
+        SteamMeta meta = fetchSteamMeta(ctx, appId);
 
         File dbFile = ctx.getDatabasePath(DB_NAME);
         if (dbFile == null || !dbFile.exists()) {
@@ -112,10 +118,97 @@ public final class BhLuaLibraryHelper {
         }
 
         // Prefer BundledSQLiteDriver (matches Room's native SQLite connection)
-        if (registerViaBundledDriver(dbFile, rowId, appId, safeName, safeCover, safeExe)) {
+        if (registerViaBundledDriver(dbFile, rowId, appId, safeName, safeCover, safeExe, meta)) {
             return true;
         }
-        return registerViaPlatformSqlite(dbFile, rowId, appId, safeName, safeCover, safeExe);
+        return registerViaPlatformSqlite(dbFile, rowId, appId, safeName, safeCover, safeExe, meta);
+    }
+
+    private static final class SteamMeta {
+        String description = "";
+        String developer = "";
+        String publisher = "";
+        String releaseDate = "";
+        String categories = "";
+        String tags = "";
+        String langs = "";
+        String screenshots = "[]";
+    }
+
+    private static SteamMeta fetchSteamMeta(Context ctx, int appId) {
+        SteamMeta m = new SteamMeta();
+        try {
+            File cacheDir = new File(ctx.getFilesDir(), "luatools/pics_cache");
+            if (!cacheDir.exists()) cacheDir.mkdirs();
+            File cacheFile = new File(cacheDir, "store_" + appId + ".json");
+            JSONObject data = null;
+            if (cacheFile.isFile() && cacheFile.length() > 0) {
+                data = new JSONObject(new String(LuaToolsStore.readAllBytes(cacheFile), "UTF-8"));
+            } else {
+                HttpURLConnection conn = null;
+                try {
+                    conn = (HttpURLConnection) new URL(
+                            "https://store.steampowered.com/api/appdetails?appids=" + appId + "&l=english").openConnection();
+                    conn.setConnectTimeout(6000);
+                    conn.setReadTimeout(8000);
+                    if (conn.getResponseCode() == 200) {
+                        InputStream in = conn.getInputStream();
+                        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                        byte[] buf = new byte[8192];
+                        int r;
+                        while ((r = in.read(buf)) != -1) bos.write(buf, 0, r);
+                        JSONObject root = new JSONObject(bos.toString("UTF-8"));
+                        JSONObject appObj = root.optJSONObject(String.valueOf(appId));
+                        if (appObj != null && appObj.optBoolean("success", false)) {
+                            data = appObj.optJSONObject("data");
+                            if (data != null) {
+                                LuaToolsStore.writeAllBytes(cacheFile, data.toString().getBytes("UTF-8"));
+                            }
+                        }
+                    }
+                } finally {
+                    if (conn != null) conn.disconnect();
+                }
+            }
+            if (data != null) {
+                m.description = data.optString("short_description", "");
+                m.developer = joinJsonStrings(data.optJSONArray("developers"), null);
+                m.publisher = joinJsonStrings(data.optJSONArray("publishers"), null);
+                JSONObject rd = data.optJSONObject("release_date");
+                if (rd != null) m.releaseDate = rd.optString("date", "");
+                m.categories = joinJsonStrings(data.optJSONArray("genres"), "description");
+                m.tags = joinJsonStrings(data.optJSONArray("categories"), "description");
+                m.langs = data.optString("supported_languages", "").replaceAll("<[^>]*>", "");
+                JSONArray ss = data.optJSONArray("screenshots");
+                if (ss != null) {
+                    JSONArray urls = new JSONArray();
+                    for (int i = 0; i < ss.length(); i++) {
+                        JSONObject s = ss.optJSONObject(i);
+                        if (s != null) {
+                            String p = s.optString("path_full", "");
+                            if (!p.isEmpty()) urls.put(p);
+                        }
+                    }
+                    m.screenshots = urls.toString();
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "fetchSteamMeta warning for " + appId + ": " + t.getMessage());
+        }
+        return m;
+    }
+
+    private static String joinJsonStrings(JSONArray arr, String objKey) {
+        if (arr == null || arr.length() == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < arr.length(); i++) {
+            String val = objKey == null ? arr.optString(i, "") : (arr.optJSONObject(i) != null ? arr.optJSONObject(i).optString(objKey, "") : "");
+            if (!val.isEmpty()) {
+                if (sb.length() > 0) sb.append(", ");
+                sb.append(val);
+            }
+        }
+        return sb.toString();
     }
 
     public static boolean removeFromLibrary(Context ctx, int appId) {
@@ -145,7 +238,7 @@ public final class BhLuaLibraryHelper {
     }
 
     private static boolean registerViaBundledDriver(
-            File dbFile, String rowId, int appId, String name, String coverUrl, String exePath
+            File dbFile, String rowId, int appId, String name, String coverUrl, String exePath, SteamMeta meta
     ) {
         Object conn = null;
         try {
@@ -174,8 +267,11 @@ public final class BhLuaLibraryHelper {
 
             execSql(conn, connCls, stmtCls, "BEGIN IMMEDIATE");
             try {
+                String legacyRowId = "lua_" + appId;
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_launch_method WHERE linked_game_id = ?", rowId);
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_library_base WHERE id = ?", rowId);
+                execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_launch_method WHERE linked_game_id = ?", legacyRowId);
+                execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_library_base WHERE id = ?", legacyRowId);
 
                 Object insLm = prepare(conn, connCls,
                         "INSERT INTO t_game_launch_method (linked_game_id, start_type, start_name, extension_data) VALUES (?, ?, ?, ?)");
@@ -201,8 +297,10 @@ public final class BhLuaLibraryHelper {
                         "INSERT INTO t_game_library_base "
                                 + "(id, user_id, server_game_id, steam_app_id, extension_type, launch_method_id, "
                                 + "game_name, game_source, source_type, `from`, source_id, "
-                                + "cover_image, cover_ver_image, logo, icon_url, square_image, back_image) "
-                                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                                + "cover_image, cover_ver_image, logo, icon_url, square_image, back_image, "
+                                + "description, developer, publisher, company, release_date, "
+                                + "game_category, game_tag, game_lang, screenshot, platforms) "
+                                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
                 try {
                     bindText(insBase, stmtCls, 1, rowId);
                     bindText(insBase, stmtCls, 2, userId);
@@ -221,6 +319,16 @@ public final class BhLuaLibraryHelper {
                     bindText(insBase, stmtCls, 15, steamHeaderUrl(appId));
                     bindText(insBase, stmtCls, 16, steamHeaderUrl(appId));
                     bindText(insBase, stmtCls, 17, steamHeroUrl(appId));
+                    bindText(insBase, stmtCls, 18, meta.description);
+                    bindText(insBase, stmtCls, 19, meta.developer);
+                    bindText(insBase, stmtCls, 20, meta.publisher);
+                    bindText(insBase, stmtCls, 21, meta.publisher);
+                    bindText(insBase, stmtCls, 22, meta.releaseDate);
+                    bindText(insBase, stmtCls, 23, meta.categories);
+                    bindText(insBase, stmtCls, 24, meta.tags);
+                    bindText(insBase, stmtCls, 25, meta.langs);
+                    bindText(insBase, stmtCls, 26, meta.screenshots);
+                    bindText(insBase, stmtCls, 27, "windows");
                     step(insBase, stmtCls);
                 } finally {
                     closeStmt(insBase, stmtCls);
@@ -252,8 +360,11 @@ public final class BhLuaLibraryHelper {
             conn = driver.getClass().getMethod("open", String.class).invoke(driver, dbFile.getPath());
             execSql(conn, connCls, stmtCls, "BEGIN IMMEDIATE");
             try {
+                String legacyRowId = "lua_" + appId;
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_launch_method WHERE linked_game_id = ?", rowId);
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_library_base WHERE id = ?", rowId);
+                execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_launch_method WHERE linked_game_id = ?", legacyRowId);
+                execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_library_base WHERE id = ?", legacyRowId);
                 execSql(conn, connCls, stmtCls, "COMMIT");
                 return true;
             } catch (Throwable t) {
@@ -270,7 +381,7 @@ public final class BhLuaLibraryHelper {
     }
 
     private static boolean registerViaPlatformSqlite(
-            File dbFile, String rowId, int appId, String name, String coverUrl, String exePath
+            File dbFile, String rowId, int appId, String name, String coverUrl, String exePath, SteamMeta meta
     ) {
         SQLiteDatabase db = null;
         try {
@@ -289,9 +400,12 @@ public final class BhLuaLibraryHelper {
             String extData = buildExtensionData(rowId, appId, name, coverUrl, exePath);
             String appStr = String.valueOf(appId);
 
+            String legacyRowId = "lua_" + appId;
             db.beginTransaction();
             db.execSQL("DELETE FROM t_game_launch_method WHERE linked_game_id=?", new Object[]{rowId});
             db.execSQL("DELETE FROM t_game_library_base WHERE id=?", new Object[]{rowId});
+            db.execSQL("DELETE FROM t_game_launch_method WHERE linked_game_id=?", new Object[]{legacyRowId});
+            db.execSQL("DELETE FROM t_game_library_base WHERE id=?", new Object[]{legacyRowId});
             db.execSQL(
                     "INSERT INTO t_game_launch_method (linked_game_id,start_type,start_name,extension_data) VALUES (?,?,?,?)",
                     new Object[]{rowId, START_TYPE_PC_EMU, name, extData});
@@ -304,12 +418,16 @@ public final class BhLuaLibraryHelper {
                     "INSERT INTO t_game_library_base "
                             + "(id,user_id,server_game_id,steam_app_id,extension_type,launch_method_id,"
                             + "game_name,game_source,source_type,`from`,source_id,"
-                            + "cover_image,cover_ver_image,logo,icon_url,square_image,back_image) "
-                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            + "cover_image,cover_ver_image,logo,icon_url,square_image,back_image,"
+                            + "description,developer,publisher,company,release_date,"
+                            + "game_category,game_tag,game_lang,screenshot,platforms) "
+                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     new Object[]{rowId, userId, appId, appStr, extType, lmId,
                             name, 1, 1, 0, appStr,
                             steamHeaderUrl(appId), coverUrl, steamLogoUrl(appId),
-                            steamHeaderUrl(appId), steamHeaderUrl(appId), steamHeroUrl(appId)});
+                            steamHeaderUrl(appId), steamHeaderUrl(appId), steamHeroUrl(appId),
+                            meta.description, meta.developer, meta.publisher, meta.publisher, meta.releaseDate,
+                            meta.categories, meta.tags, meta.langs, meta.screenshots, "windows"});
             db.setTransactionSuccessful();
             Log.i(TAG, "Registered " + rowId + " via platform SQLite (lm=" + lmId + ")");
             return true;

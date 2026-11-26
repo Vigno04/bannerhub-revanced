@@ -141,6 +141,10 @@ public class BhDownloadService extends Service {
 
     // Static registry — no binding needed; activities register/unregister directly
     private static final Set<String>                    activeJobs     = ConcurrentHashMap.newKeySet();
+    private static final Set<String>                    queuedJobs     = ConcurrentHashMap.newKeySet();
+    private static final java.util.concurrent.ConcurrentLinkedDeque<Intent> pendingQueue =
+            new java.util.concurrent.ConcurrentLinkedDeque<>();
+    private static final ExecutorService                queueExec      = Executors.newSingleThreadExecutor();
     private static final Map<String, DownloadListener>  listeners      = new ConcurrentHashMap<>();
     private static final Map<String, Runnable>          cancelHandles  = new ConcurrentHashMap<>();
     private static final Map<String, String>            gameNames      = new ConcurrentHashMap<>();
@@ -148,6 +152,8 @@ public class BhDownloadService extends Service {
     private static final Map<String, String>            lastMsgMap     = new ConcurrentHashMap<>();
     private static final Map<String, Integer>           lastPctMap     = new ConcurrentHashMap<>();
     private static final List<GlobalListener>           globalListeners = new CopyOnWriteArrayList<>();
+    private static volatile long                        lastNotifUpdateMs = 0L;
+    private static volatile int                         lastNotifPct      = -1;
 
     public interface CountObserver { void onCountChanged(int count); }
     private static volatile CountObserver sCountObserver;
@@ -174,6 +180,10 @@ public class BhDownloadService extends Service {
 
     public static boolean isActive(String gameId) {
         return activeJobs.contains(gameId);
+    }
+
+    public static boolean isQueued(String gameId) {
+        return queuedJobs.contains(gameId);
     }
 
     public static Set<String> getActiveJobs() {
@@ -228,8 +238,18 @@ public class BhDownloadService extends Service {
         if (ACTION_CANCEL.equals(action)) {
             String gameId = intent.getStringExtra(EXTRA_GAME_ID);
             if (gameId != null) {
-                Runnable h = cancelHandles.get(gameId);
-                if (h != null) h.run();
+                if (queuedJobs.remove(gameId)) {
+                    for (Intent qi : pendingQueue) {
+                        if (gameId.equals(qi.getStringExtra(EXTRA_GAME_ID))) {
+                            pendingQueue.remove(qi);
+                            break;
+                        }
+                    }
+                    notifyCancelled(gameId);
+                } else {
+                    Runnable h = cancelHandles.get(gameId);
+                    if (h != null) h.run();
+                }
             }
             return START_NOT_STICKY;
         }
@@ -240,17 +260,35 @@ public class BhDownloadService extends Service {
         String gameId   = intent.getStringExtra(EXTRA_GAME_ID);
         String gameName = intent.getStringExtra(EXTRA_GAME_NAME);
         if (gameId == null || store == null) return START_NOT_STICKY;
-        if (activeJobs.contains(gameId)) return START_NOT_STICKY;
+        if (activeJobs.contains(gameId) || queuedJobs.contains(gameId)) return START_NOT_STICKY;
 
-        activeJobs.add(gameId);
-        fireCountObserver();
         gameNames.put(gameId, gameName != null ? gameName : "");
         gameStores.put(gameId, store);
+
+        if (!activeJobs.isEmpty()) {
+            queuedJobs.add(gameId);
+            pendingQueue.addLast(intent);
+            lastMsgMap.put(gameId, "Queued");
+            lastPctMap.put(gameId, 0);
+            fireCountObserver();
+            for (GlobalListener gl : globalListeners) {
+                gl.onAnyProgress(gameId, gameName != null ? gameName : "", "Queued", 0);
+            }
+            return START_NOT_STICKY;
+        }
+
+        dispatchJob(intent, gameId, gameName, store);
+        return START_NOT_STICKY;
+    }
+
+    private void dispatchJob(Intent savedIntent, String gameId, String gameName, String store) {
+        activeJobs.add(gameId);
+        fireCountObserver();
+        lastNotifUpdateMs = 0L;
+        lastNotifPct = -1;
         startForeground(NOTIF_ID, buildProgressNotif(gameName != null ? gameName : "", "Starting…", 0, gameId));
 
-        ExecutorService exec = Executors.newSingleThreadExecutor();
-        final Intent savedIntent = intent;
-        exec.submit(() -> {
+        queueExec.submit(() -> {
             try {
                 switch (store) {
                     case "GOG":       runGog(savedIntent, gameId, gameName);      break;
@@ -263,11 +301,27 @@ public class BhDownloadService extends Service {
             } finally {
                 activeJobs.remove(gameId);
                 cancelHandles.remove(gameId);
-                exec.shutdown();
+                drainNextQueued();
             }
         });
+    }
 
-        return START_NOT_STICKY;
+    private void drainNextQueued() {
+        Intent next = pendingQueue.pollFirst();
+        if (next != null) {
+            String nextId = next.getStringExtra(EXTRA_GAME_ID);
+            String nextStore = next.getStringExtra(EXTRA_STORE);
+            String nextName = next.getStringExtra(EXTRA_GAME_NAME);
+            if (nextId != null && nextStore != null) {
+                queuedJobs.remove(nextId);
+                dispatchJob(next, nextId, nextName, nextStore);
+                return;
+            }
+        }
+        if (activeJobs.isEmpty()) {
+            stopForeground(true);
+            stopSelf();
+        }
     }
 
     // ── Epic download ─────────────────────────────────────────────────────────
@@ -438,7 +492,12 @@ public class BhDownloadService extends Service {
         String name = gameNames.getOrDefault(gameId, "");
         lastMsgMap.put(gameId, msg);
         lastPctMap.put(gameId, pct);
-        updateProgressNotif(name, msg, pct, gameId);
+        long now = System.currentTimeMillis();
+        if (pct != lastNotifPct || (now - lastNotifUpdateMs) >= 700L) {
+            lastNotifUpdateMs = now;
+            lastNotifPct = pct;
+            updateProgressNotif(name, msg, pct, gameId);
+        }
         DownloadListener l = listeners.get(gameId);
         if (l != null) l.onProgress(msg, pct);
         for (GlobalListener gl : globalListeners) gl.onAnyProgress(gameId, name, msg, pct);
@@ -464,10 +523,6 @@ public class BhDownloadService extends Service {
                     buildDoneNotif(name != null ? name : "Game"));
         }
         for (GlobalListener gl : globalListeners) gl.onAnyComplete(gameId, name != null ? name : "");
-        if (activeJobs.isEmpty()) {
-            stopForeground(true);
-            stopSelf();
-        }
     }
 
     private void saveLibraryEntry(String dlKey, String name, String store, String installPath) {
@@ -495,10 +550,6 @@ public class BhDownloadService extends Service {
             notifMgr.notify(NOTIF_DONE_BASE + doneCounter.getAndIncrement(), b.build());
         }
         for (GlobalListener gl : globalListeners) gl.onAnyError(gameId, msg);
-        if (activeJobs.isEmpty()) {
-            stopForeground(true);
-            stopSelf();
-        }
     }
 
     private void notifyCancelled(String gameId) {
@@ -512,7 +563,7 @@ public class BhDownloadService extends Service {
         DownloadListener l = listeners.remove(gameId);
         if (l != null) l.onCancelled();
         for (GlobalListener gl : globalListeners) gl.onAnyCancelled(gameId);
-        if (activeJobs.isEmpty()) {
+        if (activeJobs.isEmpty() && pendingQueue.isEmpty()) {
             stopForeground(true);
             stopSelf();
         }
