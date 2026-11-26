@@ -257,7 +257,12 @@ public class BhDownloadService extends Service {
                     case "STEAM_LUA": runSteamLua(savedIntent, gameId, gameName); break;
                     default:          notifyError(gameId, "Unknown store: " + store);
                 }
+            } catch (Throwable t) {
+                Log.e(TAG, "[" + gameId + "] uncaught download error", t);
+                notifyError(gameId, t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
             } finally {
+                activeJobs.remove(gameId);
+                cancelHandles.remove(gameId);
                 exec.shutdown();
             }
         });

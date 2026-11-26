@@ -65,10 +65,10 @@ public class BhLuaBridgeProvider extends LuaToolsBridgeProvider {
             BhLuaLibraryHelper.saveGameMeta(ctx, appId, name, installDir.getAbsolutePath(), fullExe, cover, installed);
             if (installed) {
                 LuaToolsSteamEmu.attachGameRuntime(ctx, appId, installDir);
-                BhLuaLibraryHelper.registerInLibrary(ctx, appId, name, fullExe, cover);
             } else {
                 postPushedNotification(ctx, appId, name);
             }
+            BhLuaLibraryHelper.registerInLibrary(ctx, appId, name, fullExe, cover);
         } catch (Throwable t) {
             Log.w(TAG, "onGameAdded warning", t);
         }
@@ -109,8 +109,29 @@ public class BhLuaBridgeProvider extends LuaToolsBridgeProvider {
             Thread t = new Thread(() -> watchLoop(ctx.getApplicationContext()), "bh-lua-pcengine-watch");
             t.setDaemon(true);
             t.start();
+            Thread syncLib = new Thread(() -> syncAllLuaGamesToLibrary(ctx.getApplicationContext()), "bh-lua-lib-sync");
+            syncLib.setDaemon(true);
+            syncLib.start();
         }
         return true;
+    }
+
+    private static void syncAllLuaGamesToLibrary(Context ctx) {
+        try {
+            LuaToolsStore store = LuaToolsJavaSteamHook.get(ctx).getStore();
+            for (int appId : store.listLuaAppIds()) {
+                String name = store.getGameName(appId);
+                File installDir = SteamCdnDownloader.resolveGameInstallDir(ctx, appId, name);
+                String relExe = SteamCdnDownloader.detectExecutable(ctx, appId, name, installDir, null);
+                String fullExe = relExe != null ? new File(installDir, relExe).getAbsolutePath() : "";
+                String cover = BhLuaLibraryHelper.steamCapsuleUrl(appId);
+                boolean installed = !fullExe.isEmpty() && new File(fullExe).isFile();
+                BhLuaLibraryHelper.saveGameMeta(ctx, appId, name, installDir.getAbsolutePath(), fullExe, cover, installed);
+                BhLuaLibraryHelper.registerInLibrary(ctx, appId, name, fullExe, cover);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "syncAllLuaGamesToLibrary warning: " + t.getMessage());
+        }
     }
 
     @Override
@@ -183,13 +204,82 @@ public class BhLuaBridgeProvider extends LuaToolsBridgeProvider {
     }
 
     public static void startGameDownload(Context ctx, int appId, String name) {
+        String safeName = name != null && !name.isEmpty() ? name : ("AppID " + appId);
         Intent i = new Intent(ctx, BhDownloadService.class);
         i.setAction(BhDownloadService.ACTION_START);
         i.putExtra(BhDownloadService.EXTRA_STORE, "STEAM_LUA");
         i.putExtra(BhDownloadService.EXTRA_GAME_ID, "steam_lua_" + appId);
-        i.putExtra(BhDownloadService.EXTRA_GAME_NAME, name != null && !name.isEmpty() ? name : ("AppID " + appId));
+        i.putExtra(BhDownloadService.EXTRA_GAME_NAME, safeName);
         i.putExtra("steam_lua_app_id", appId);
-        ctx.startForegroundService(i);
+        try {
+            ctx.startForegroundService(i);
+        } catch (Throwable fgsErr) {
+            // Android 14+/16 blocks startForegroundService from a background ContentProvider call.
+            // Fall back to in-process SteamCdnDownloader with regular NotificationManager updates.
+            Log.w(TAG, "startForegroundService blocked (" + fgsErr.getMessage() + "), using in-process fallback");
+            startDownloadFallback(ctx.getApplicationContext(), appId, safeName);
+        }
+    }
+
+    private static void startDownloadFallback(Context ctx, int appId, String safeName) {
+        final int notifId = 9400 + (appId % 1000);
+        final NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(new NotificationChannel(
+                    "bh_downloads", "BannerHub Downloads", NotificationManager.IMPORTANCE_LOW));
+        }
+        SteamCdnDownloader.startDownload(ctx, appId, 4, new SteamCdnDownloader.Callback() {
+            private long lastNotifMs = 0L;
+
+            @Override public void onProgress(String msg, int pct) {
+                long now = System.currentTimeMillis();
+                if (nm == null || (now - lastNotifMs < 1200L && pct < 100)) return;
+                lastNotifMs = now;
+                try {
+                    Notification.Builder b = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                            ? new Notification.Builder(ctx, "bh_downloads")
+                            : new Notification.Builder(ctx);
+                    b.setSmallIcon(android.R.drawable.stat_sys_download)
+                            .setContentTitle(safeName)
+                            .setContentText(msg)
+                            .setProgress(100, pct, pct == 0)
+                            .setOngoing(true);
+                    nm.notify(notifId, b.build());
+                } catch (Throwable ignored) {}
+            }
+
+            @Override public void onComplete(String installDir, String exePath) {
+                if (nm == null) return;
+                try {
+                    Notification.Builder b = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                            ? new Notification.Builder(ctx, "bh_downloads")
+                            : new Notification.Builder(ctx);
+                    b.setSmallIcon(android.R.drawable.stat_sys_download_done)
+                            .setContentTitle(safeName + " — installed")
+                            .setContentText("Ready to play in BannerHub")
+                            .setAutoCancel(true);
+                    nm.notify(notifId, b.build());
+                } catch (Throwable ignored) {}
+            }
+
+            @Override public void onError(String msg) {
+                if (nm == null) return;
+                try {
+                    Notification.Builder b = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                            ? new Notification.Builder(ctx, "bh_downloads")
+                            : new Notification.Builder(ctx);
+                    b.setSmallIcon(android.R.drawable.stat_notify_error)
+                            .setContentTitle(safeName + " — download failed")
+                            .setContentText(msg)
+                            .setAutoCancel(true);
+                    nm.notify(notifId, b.build());
+                } catch (Throwable ignored) {}
+            }
+
+            @Override public void onCancelled() {
+                if (nm != null) nm.cancel(notifId);
+            }
+        });
     }
 
     private static void watchLoop(Context ctx) {

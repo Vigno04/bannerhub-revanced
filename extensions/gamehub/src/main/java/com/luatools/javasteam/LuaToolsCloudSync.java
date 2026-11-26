@@ -19,8 +19,8 @@ import java.util.zip.ZipOutputStream;
  * Universal, sandbox-safe CloudRedirect sync helper for ANY Android Steam emulator
  * (GameNative, Pluvia, BannerHub, GameHub, Winlator, etc.).
  *
- * Transfers flat save files over ContentProvider ParcelFileDescriptor streams so
- * no root access, SAF prompts, or cross-app storage permissions are needed.
+ * Transfers save files over ContentProvider ParcelFileDescriptor streams using
+ * Steam AutoCloud canonical (root_token, relative_path) keys for 100% PC/Android parity.
  */
 public final class LuaToolsCloudSync {
 
@@ -30,6 +30,22 @@ public final class LuaToolsCloudSync {
             Uri.parse("content://com.luatools.companion.bridge");
 
     private LuaToolsCloudSync() {}
+
+    public static final class CloudSaveTarget {
+        public final File rootDir;
+        public final String rootToken;
+        public final String subPath;
+
+        public CloudSaveTarget(File rootDir, String rootToken, String subPath) {
+            this.rootDir = rootDir;
+            this.rootToken = rootToken == null ? "" : rootToken;
+            this.subPath = subPath == null ? "" : subPath;
+        }
+
+        public File getTargetDir() {
+            return subPath.isEmpty() ? rootDir : new File(rootDir, subPath);
+        }
+    }
 
     public static boolean isCompanionInstalled(Context ctx) {
         if (ctx == null) return false;
@@ -44,11 +60,11 @@ public final class LuaToolsCloudSync {
     }
 
     /**
-     * Resolves the game's real Steam AutoCloud save directory from cached PICS {@code ufs.savefiles}
-     * (e.g. {@code Documents/My Games/<Game>/Steam/<steamId64>}), falling back to Goldberg's
+     * Resolves the game's canonical AutoCloud root directory, Steam root token (e.g. {@code %WinMyDocuments%}),
+     * and relative sub-path (e.g. {@code My Games/<Game>/Steam/<steamId64>}), falling back to Goldberg's
      * {@code AppData/Roaming/GSE Saves/<appId>/remote} when no Windows AutoCloud path is declared.
      */
-    public static File resolveCloudSaveDir(
+    public static CloudSaveTarget resolveCloudSaveTarget(
             Context ctx,
             int appId,
             File winePrefix,
@@ -58,7 +74,9 @@ public final class LuaToolsCloudSync {
         String user = (userName == null || userName.isEmpty()) ? "steamuser" : userName;
         File fallback = new File(winePrefix,
                 "drive_c/users/" + user + "/AppData/Roaming/GSE Saves/" + appId + "/remote");
-        if (ctx == null || winePrefix == null) return fallback;
+        if (ctx == null || winePrefix == null) {
+            return new CloudSaveTarget(fallback, "%SteamUserBaseStorage%", "");
+        }
 
         try {
             org.json.JSONObject pics = LuaToolsJavaSteamHook.get(ctx).getStore().getPicsInfo(appId);
@@ -67,7 +85,9 @@ public final class LuaToolsCloudSync {
                         ? pics.optJSONObject("ufs").optJSONObject("savefiles")
                         : null
                     : null;
-            if (savefiles == null) return fallback;
+            if (savefiles == null) {
+                return new CloudSaveTarget(fallback, "%SteamUserBaseStorage%", "");
+            }
 
             java.util.Iterator<String> keys = savefiles.keys();
             while (keys.hasNext()) {
@@ -92,17 +112,23 @@ public final class LuaToolsCloudSync {
 
                 String root = entry.optString("root", "");
                 String relPath = entry.optString("path", "").replace('\\', '/');
-                File baseDir = null;
+                File baseDir;
+                String rootToken;
                 if (root.equalsIgnoreCase("WinMyDocuments") || root.equalsIgnoreCase("SteamAutoSaveRoot")) {
                     baseDir = new File(winePrefix, "drive_c/users/" + user + "/Documents");
+                    rootToken = "%WinMyDocuments%";
                 } else if (root.equalsIgnoreCase("WinAppDataRoaming")) {
                     baseDir = new File(winePrefix, "drive_c/users/" + user + "/AppData/Roaming");
+                    rootToken = "%WinAppDataRoaming%";
                 } else if (root.equalsIgnoreCase("WinAppDataLocal")) {
                     baseDir = new File(winePrefix, "drive_c/users/" + user + "/AppData/Local");
+                    rootToken = "%WinAppDataLocal%";
                 } else if (root.equalsIgnoreCase("WinAppDataLocalLow")) {
                     baseDir = new File(winePrefix, "drive_c/users/" + user + "/AppData/LocalLow");
+                    rootToken = "%WinAppDataLocalLow%";
                 } else if (root.equalsIgnoreCase("WinSavedGames")) {
                     baseDir = new File(winePrefix, "drive_c/users/" + user + "/Saved Games");
+                    rootToken = "%WinSavedGames%";
                 } else {
                     continue;
                 }
@@ -124,14 +150,24 @@ public final class LuaToolsCloudSync {
                     }
                 }
                 relPath = relPath.replaceAll("^/+|/+$", "");
-                File resolved = relPath.isEmpty() ? baseDir : new File(baseDir, relPath);
-                Log.i(TAG, "Resolved cloud save dir for appId=" + appId + ": " + resolved.getAbsolutePath());
-                return resolved;
+                Log.i(TAG, "Resolved cloud save target for appId=" + appId
+                        + ": root=" + rootToken + " subPath=" + relPath);
+                return new CloudSaveTarget(baseDir, rootToken, relPath);
             }
         } catch (Throwable t) {
-            Log.w(TAG, "resolveCloudSaveDir failed for appId=" + appId + ": " + t.getMessage());
+            Log.w(TAG, "resolveCloudSaveTarget failed for appId=" + appId + ": " + t.getMessage());
         }
-        return fallback;
+        return new CloudSaveTarget(fallback, "%SteamUserBaseStorage%", "");
+    }
+
+    public static File resolveCloudSaveDir(
+            Context ctx,
+            int appId,
+            File winePrefix,
+            String userName,
+            String steamId64
+    ) {
+        return resolveCloudSaveTarget(ctx, appId, winePrefix, userName, steamId64).getTargetDir();
     }
 
     private static String detectSteamId64Dir(File parentDir) {
@@ -146,31 +182,44 @@ public final class LuaToolsCloudSync {
         return null;
     }
 
+    public static boolean onPreLaunch(Context ctx, int appId, File saveRemoteDir) {
+        return onPreLaunch(ctx, appId, new CloudSaveTarget(saveRemoteDir, "", ""));
+    }
+
     /**
      * Call before launching a LuaTools game. Pulls the latest saves from Google Drive
-     * via the LuaTools Companion App and unpacks them directly into {@code saveRemoteDir}
-     * (e.g. {@code <winePrefix>/drive_c/users/steamuser/AppData/Roaming/GSE Saves/<appId>/remote}).
+     * via the LuaTools Companion App and unpacks them into {@code target.rootDir}.
+     * Never overwrites local saves if offline or if a sync conflict is detected.
      */
-    public static boolean onPreLaunch(Context ctx, int appId, File saveRemoteDir) {
-        if (ctx == null || appId <= 0 || saveRemoteDir == null || !isCompanionInstalled(ctx)) {
+    public static boolean onPreLaunch(Context ctx, int appId, CloudSaveTarget target) {
+        if (ctx == null || appId <= 0 || target == null || target.rootDir == null
+                || !isCompanionInstalled(ctx)) {
             return false;
         }
         try {
             Bundle args = new Bundle();
             args.putInt("app_id", appId);
             args.putString("source_package", ctx.getPackageName());
+            args.putString("root_token", target.rootToken);
+            args.putString("sub_path", target.subPath);
 
             Bundle res = ctx.getContentResolver().call(
                     COMPANION_BRIDGE_URI, "sync_pre_launch", String.valueOf(appId), args);
             if (res == null || !res.getBoolean("ok", false)) return false;
+            if (res.getBoolean("has_conflict", false) || res.getBoolean("offline", false)) {
+                Log.w(TAG, "onPreLaunch skipped unpack for appId=" + appId
+                        + " conflict=" + res.getBoolean("has_conflict", false)
+                        + " offline=" + res.getBoolean("offline", false));
+                return false;
+            }
 
             String zipUriStr = res.getString("zip_uri");
             if (res.getBoolean("has_files", false) && zipUriStr != null && !zipUriStr.isEmpty()) {
-                if (!saveRemoteDir.exists()) saveRemoteDir.mkdirs();
+                if (!target.rootDir.exists()) target.rootDir.mkdirs();
                 InputStream in = ctx.getContentResolver().openInputStream(Uri.parse(zipUriStr));
                 if (in != null) {
                     try {
-                        int count = unzipToDir(in, saveRemoteDir);
+                        int count = unzipToDir(in, target.rootDir);
                         Log.i(TAG, "Pre-launch cloud sync unpacked " + count + " file(s) for appId=" + appId);
                     } finally {
                         in.close();
@@ -184,22 +233,30 @@ public final class LuaToolsCloudSync {
         }
     }
 
-    /**
-     * Call after a LuaTools game exits. Packs all files from {@code saveRemoteDir}, streams
-     * them to the Companion App, and uploads them to Google Drive via CloudRedirect.
-     */
     public static boolean onPostExit(Context ctx, int appId, File saveRemoteDir) {
-        if (ctx == null || appId <= 0 || saveRemoteDir == null || !saveRemoteDir.isDirectory()
+        return onPostExit(ctx, appId, new CloudSaveTarget(saveRemoteDir, "", ""));
+    }
+
+    /**
+     * Call after a LuaTools game exits. Packs all files from {@code target.getTargetDir()}
+     * with paths relative to {@code target.rootDir}, streams them to the Companion App,
+     * and uploads them to Google Drive via CloudRedirect.
+     */
+    public static boolean onPostExit(Context ctx, int appId, CloudSaveTarget target) {
+        if (ctx == null || appId <= 0 || target == null || target.rootDir == null
                 || !isCompanionInstalled(ctx)) {
             return false;
         }
+        File scanDir = target.getTargetDir();
+        if (!scanDir.isDirectory()) return false;
+
         try {
             Uri uploadUri = Uri.parse("content://com.luatools.companion.bridge/cloud_in/" + appId);
             OutputStream out = ctx.getContentResolver().openOutputStream(uploadUri, "wt");
             if (out == null) return false;
             int count;
             try {
-                count = zipDirToStream(saveRemoteDir, out);
+                count = zipDirToStream(target.rootDir, scanDir, out);
             } finally {
                 out.close();
             }
@@ -209,6 +266,8 @@ public final class LuaToolsCloudSync {
             args.putInt("app_id", appId);
             args.putString("source_package", ctx.getPackageName());
             args.putBoolean("has_zip", true);
+            args.putString("root_token", target.rootToken);
+            args.putString("sub_path", target.subPath);
             Bundle res = ctx.getContentResolver().call(
                     COMPANION_BRIDGE_URI, "sync_post_exit", String.valueOf(appId), args);
             boolean ok = res != null && res.getBoolean("ok", false);
@@ -259,9 +318,9 @@ public final class LuaToolsCloudSync {
         f.delete();
     }
 
-    private static int zipDirToStream(File rootDir, OutputStream out) throws Exception {
+    private static int zipDirToStream(File rootDir, File scanDir, OutputStream out) throws Exception {
         ZipOutputStream zos = new ZipOutputStream(out);
-        int count = addDirToZip(rootDir, rootDir, zos);
+        int count = addDirToZip(rootDir, scanDir, zos);
         zos.finish();
         zos.flush();
         return count;
@@ -272,12 +331,15 @@ public final class LuaToolsCloudSync {
         if (files == null) return 0;
         int count = 0;
         byte[] buf = new byte[8192];
+        String rootPrefix = root.getAbsolutePath();
         for (File f : files) {
             if (f.isDirectory()) {
                 count += addDirToZip(root, f, zos);
             } else if (f.isFile()) {
-                String rel = f.getAbsolutePath().substring(root.getAbsolutePath().length() + 1)
-                        .replace('\\', '/');
+                String abs = f.getAbsolutePath();
+                String rel = abs.startsWith(rootPrefix)
+                        ? abs.substring(rootPrefix.length() + 1).replace('\\', '/')
+                        : f.getName();
                 zos.putNextEntry(new ZipEntry(rel));
                 FileInputStream fis = new FileInputStream(f);
                 try {

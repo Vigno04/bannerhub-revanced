@@ -244,8 +244,9 @@ public final class SteamCdnDownloader {
                         continue;
                     }
 
-                    // Fast resume: if depot completed or exact size & all chunks verify Adler32, skip
-                    if (target.isFile() && target.length() == fm.size) {
+                    // Fast resume: only verify existing file/chunks if file already existed with non-zero size
+                    boolean existedBefore = target.isFile() && target.length() > 0;
+                    if (existedBefore && target.length() == fm.size) {
                         if (depotAlreadyMarked || verifyFileChunks(target, fm)) {
                             alreadyDoneBytes += fm.size;
                             continue;
@@ -260,8 +261,7 @@ public final class SteamCdnDownloader {
                     }
 
                     for (SteamManifestParser.ChunkData chunk : fm.chunks) {
-                        // Skip individual chunk if existing bytes at offset already match Adler32
-                        if (target.isFile() && target.length() >= chunk.offset + chunk.cbOriginal
+                        if (existedBefore && target.length() >= chunk.offset + chunk.cbOriginal
                                 && verifySingleChunkOnDisk(target, chunk)) {
                             alreadyDoneBytes += chunk.cbOriginal;
                         } else {
@@ -454,11 +454,32 @@ public final class SteamCdnDownloader {
 
     private static byte[] decompressChunk(byte[] dec, int expectedSize) throws Exception {
         if (dec.length >= 4 && dec[0] == 'V' && dec[1] == 'S' && dec[2] == 'Z' && dec[3] == 'a') {
-            if (dec.length <= 8) throw new IllegalArgumentException("VSZa chunk too small");
-            InputStream raw = new ByteArrayInputStream(dec, 8, dec.length - 8);
+            if (dec.length <= 12) throw new IllegalArgumentException("VSZa chunk too small");
+            int zstdOffset = 8;
+            for (int i = 4; i <= Math.min(16, dec.length - 4); i++) {
+                if (dec[i] == (byte) 0x28 && dec[i + 1] == (byte) 0xB5
+                        && dec[i + 2] == (byte) 0x2F && dec[i + 3] == (byte) 0xFD) {
+                    zstdOffset = i;
+                    break;
+                }
+            }
+            InputStream raw = new ByteArrayInputStream(dec, zstdOffset, dec.length - zstdOffset);
             InputStream zstdIn = BhTzstReader.openZstd(raw);
             if (zstdIn == null) throw new IllegalStateException("Host Zstd decompressor unavailable");
             try {
+                if (expectedSize > 0) {
+                    byte[] out = new byte[expectedSize];
+                    int off = 0;
+                    while (off < expectedSize) {
+                        int r = zstdIn.read(out, off, expectedSize - off);
+                        if (r < 0) break;
+                        off += r;
+                    }
+                    if (off != expectedSize) {
+                        return Arrays.copyOf(out, off);
+                    }
+                    return out;
+                }
                 return readAllInputBytes(zstdIn);
             } finally {
                 zstdIn.close();

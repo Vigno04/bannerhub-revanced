@@ -87,11 +87,20 @@ public final class BhLuaLibraryHelper {
         return "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/" + appId + "/header.jpg";
     }
 
+    public static String steamHeroUrl(int appId) {
+        return "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/" + appId + "/library_hero.jpg";
+    }
+
+    public static String steamLogoUrl(int appId) {
+        return "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/" + appId + "/logo.png";
+    }
+
     /** Registers or updates the game in db_game_library.db so it appears in GameHub's library. */
     public static boolean registerInLibrary(
             Context ctx, int appId, String name, String exeFullPath, String coverUrl
     ) {
-        if (ctx == null || appId <= 0 || exeFullPath == null || exeFullPath.isEmpty()) return false;
+        if (ctx == null || appId <= 0) return false;
+        String safeExe = exeFullPath != null ? exeFullPath : "";
         String safeName = (name != null && !name.isEmpty()) ? name : ("AppID " + appId);
         String safeCover = (coverUrl != null && !coverUrl.isEmpty()) ? coverUrl : steamCapsuleUrl(appId);
         String rowId = gameRowId(appId);
@@ -103,10 +112,10 @@ public final class BhLuaLibraryHelper {
         }
 
         // Prefer BundledSQLiteDriver (matches Room's native SQLite connection)
-        if (registerViaBundledDriver(dbFile, rowId, appId, safeName, safeCover, exeFullPath)) {
+        if (registerViaBundledDriver(dbFile, rowId, appId, safeName, safeCover, safeExe)) {
             return true;
         }
-        return registerViaPlatformSqlite(dbFile, rowId, appId, safeName, safeCover, exeFullPath);
+        return registerViaPlatformSqlite(dbFile, rowId, appId, safeName, safeCover, safeExe);
     }
 
     public static boolean removeFromLibrary(Context ctx, int appId) {
@@ -192,25 +201,26 @@ public final class BhLuaLibraryHelper {
                         "INSERT INTO t_game_library_base "
                                 + "(id, user_id, server_game_id, steam_app_id, extension_type, launch_method_id, "
                                 + "game_name, game_source, source_type, `from`, source_id, "
-                                + "cover_image, cover_ver_image, logo, icon_url, square_image) "
-                                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                                + "cover_image, cover_ver_image, logo, icon_url, square_image, back_image) "
+                                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
                 try {
                     bindText(insBase, stmtCls, 1, rowId);
                     bindText(insBase, stmtCls, 2, userId);
-                    bindLong(insBase, stmtCls, 3, 0);
+                    bindLong(insBase, stmtCls, 3, appId);
                     bindText(insBase, stmtCls, 4, appStr);
                     bindLong(insBase, stmtCls, 5, extType);
                     bindLong(insBase, stmtCls, 6, lmId);
                     bindText(insBase, stmtCls, 7, name);
-                    bindLong(insBase, stmtCls, 8, 3);
-                    bindLong(insBase, stmtCls, 9, 0);
+                    bindLong(insBase, stmtCls, 8, 1);
+                    bindLong(insBase, stmtCls, 9, 1);
                     bindLong(insBase, stmtCls, 10, 0);
                     bindText(insBase, stmtCls, 11, appStr);
-                    bindText(insBase, stmtCls, 12, coverUrl);
+                    bindText(insBase, stmtCls, 12, steamHeaderUrl(appId));
                     bindText(insBase, stmtCls, 13, coverUrl);
-                    bindText(insBase, stmtCls, 14, coverUrl);
-                    bindText(insBase, stmtCls, 15, coverUrl);
-                    bindText(insBase, stmtCls, 16, coverUrl);
+                    bindText(insBase, stmtCls, 14, steamLogoUrl(appId));
+                    bindText(insBase, stmtCls, 15, steamHeaderUrl(appId));
+                    bindText(insBase, stmtCls, 16, steamHeaderUrl(appId));
+                    bindText(insBase, stmtCls, 17, steamHeroUrl(appId));
                     step(insBase, stmtCls);
                 } finally {
                     closeStmt(insBase, stmtCls);
@@ -294,11 +304,12 @@ public final class BhLuaLibraryHelper {
                     "INSERT INTO t_game_library_base "
                             + "(id,user_id,server_game_id,steam_app_id,extension_type,launch_method_id,"
                             + "game_name,game_source,source_type,`from`,source_id,"
-                            + "cover_image,cover_ver_image,logo,icon_url,square_image) "
-                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    new Object[]{rowId, userId, 0, appStr, extType, lmId,
-                            name, 3, 0, 0, appStr,
-                            coverUrl, coverUrl, coverUrl, coverUrl, coverUrl});
+                            + "cover_image,cover_ver_image,logo,icon_url,square_image,back_image) "
+                            + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    new Object[]{rowId, userId, appId, appStr, extType, lmId,
+                            name, 1, 1, 0, appStr,
+                            steamHeaderUrl(appId), coverUrl, steamLogoUrl(appId),
+                            steamHeaderUrl(appId), steamHeaderUrl(appId), steamHeroUrl(appId)});
             db.setTransactionSuccessful();
             Log.i(TAG, "Registered " + rowId + " via platform SQLite (lm=" + lmId + ")");
             return true;

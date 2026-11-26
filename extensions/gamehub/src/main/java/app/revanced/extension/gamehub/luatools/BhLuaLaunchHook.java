@@ -106,6 +106,21 @@ public final class BhLuaLaunchHook {
                 if (f.isDirectory()) installDir = f;
             }
 
+            boolean exeExists = exePath != null && !exePath.isEmpty() && new File(exePath).isFile();
+            if (!exeExists) {
+                String detected = SteamCdnDownloader.detectExecutable(
+                        ctx, appId, LuaToolsJavaSteamHook.get(ctx).getStore().getGameName(appId), installDir, null);
+                if (detected == null || !new File(installDir, detected).isFile()) {
+                    String gName = LuaToolsJavaSteamHook.get(ctx).getStore().getGameName(appId);
+                    BhLuaBridgeProvider.startGameDownload(ctx, appId, gName);
+                    Intent dlIntent = new Intent(ctx, BhLuaGamesActivity.class);
+                    dlIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    ctx.startActivity(dlIntent);
+                    activity.finish();
+                    return;
+                }
+            }
+
             // 1. Ensure SteamEmu runtime (steam_appid.txt + Goldberg/GSE DLLs if needed)
             try {
                 LuaToolsSteamEmu.attachGameRuntime(ctx, appId, installDir);
