@@ -267,7 +267,7 @@ public final class BhLuaLibraryHelper {
 
             execSql(conn, connCls, stmtCls, "BEGIN IMMEDIATE");
             try {
-                String legacyRowId = "lua_" + appId;
+                String legacyRowId = "lua_" + rowId;
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_launch_method WHERE linked_game_id = ?", rowId);
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_library_base WHERE id = ?", rowId);
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_launch_method WHERE linked_game_id = ?", legacyRowId);
@@ -360,7 +360,7 @@ public final class BhLuaLibraryHelper {
             conn = driver.getClass().getMethod("open", String.class).invoke(driver, dbFile.getPath());
             execSql(conn, connCls, stmtCls, "BEGIN IMMEDIATE");
             try {
-                String legacyRowId = "lua_" + appId;
+                String legacyRowId = "lua_" + rowId;
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_launch_method WHERE linked_game_id = ?", rowId);
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_library_base WHERE id = ?", rowId);
                 execSql1(conn, connCls, stmtCls, "DELETE FROM t_game_launch_method WHERE linked_game_id = ?", legacyRowId);
