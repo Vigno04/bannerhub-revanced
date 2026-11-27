@@ -42,6 +42,9 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
     private final Handler ui = new Handler(Looper.getMainLooper());
     private LinearLayout listLayout;
     private TextView statusBanner;
+    private final java.util.Map<String, TextView> activeSubViews = new java.util.HashMap<>();
+    private final java.util.Map<String, String> activeBaseSubText = new java.util.HashMap<>();
+    private final java.util.Map<String, ProgressBar> activeProgressBars = new java.util.HashMap<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -117,6 +120,9 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
     private void refreshList() {
         if (listLayout == null) return;
         listLayout.removeAllViews();
+        activeSubViews.clear();
+        activeBaseSubText.clear();
+        activeProgressBars.clear();
 
         LuaToolsStore store = LuaToolsJavaSteamHook.get(this).getStore();
         List<Integer> appIds = store.listLuaAppIds();
@@ -183,10 +189,13 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
         card.addView(titleTv);
 
         File fixMarker = new File(getFilesDir(), "luatools/fixes/" + appId + ".json");
-        StringBuilder sub = new StringBuilder();
-        sub.append("Manifests: ").append(cachedManifests).append("/").append(totalDepots);
-        sub.append("  •  ").append(installed ? "Installed" : "Not downloaded");
-        if (fixMarker.isFile()) sub.append("  •  Fix applied");
+        StringBuilder baseSub = new StringBuilder();
+        baseSub.append("Manifests: ").append(cachedManifests).append("/").append(totalDepots);
+        baseSub.append("  •  ").append(installed ? "Installed" : "Not downloaded");
+        if (fixMarker.isFile()) baseSub.append("  •  Fix applied");
+        String baseSubStr = baseSub.toString();
+
+        StringBuilder sub = new StringBuilder(baseSubStr);
         if (active) {
             sub.append("\n").append(BhDownloadService.getLastMsg(dlKey))
                     .append(" (").append(BhDownloadService.getLastPct(dlKey)).append("%)");
@@ -213,6 +222,9 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
             pblp.topMargin = dp(6);
             pb.setLayoutParams(pblp);
             card.addView(pb);
+            activeSubViews.put(dlKey, subTv);
+            activeBaseSubText.put(dlKey, baseSubStr);
+            activeProgressBars.put(dlKey, pb);
         }
 
         LinearLayout row = new LinearLayout(this);
@@ -356,7 +368,17 @@ public class BhLuaGamesActivity extends Activity implements BhDownloadService.Gl
     @Override
     public void onAnyProgress(String gameId, String gameName, String msg, int pct) {
         if (gameId != null && gameId.startsWith("steam_lua_")) {
-            ui.post(this::refreshList);
+            ui.post(() -> {
+                TextView tv = activeSubViews.get(gameId);
+                ProgressBar pb = activeProgressBars.get(gameId);
+                if (tv != null && pb != null) {
+                    String base = activeBaseSubText.getOrDefault(gameId, "");
+                    tv.setText(base + "\n" + msg + " (" + pct + "%)");
+                    pb.setProgress(pct);
+                } else {
+                    refreshList();
+                }
+            });
         }
     }
 

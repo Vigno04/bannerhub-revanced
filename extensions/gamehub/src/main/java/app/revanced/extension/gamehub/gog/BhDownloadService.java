@@ -154,6 +154,7 @@ public class BhDownloadService extends Service {
     private static final List<GlobalListener>           globalListeners = new CopyOnWriteArrayList<>();
     private static volatile long                        lastNotifUpdateMs = 0L;
     private static volatile int                         lastNotifPct      = -1;
+    private static volatile long                        lastUiUpdateMs    = 0L;
 
     public interface CountObserver { void onCountChanged(int count); }
     private static volatile CountObserver sCountObserver;
@@ -498,9 +499,12 @@ public class BhDownloadService extends Service {
             lastNotifPct = pct;
             updateProgressNotif(name, msg, pct, gameId);
         }
-        DownloadListener l = listeners.get(gameId);
-        if (l != null) l.onProgress(msg, pct);
-        for (GlobalListener gl : globalListeners) gl.onAnyProgress(gameId, name, msg, pct);
+        if ((now - lastUiUpdateMs) >= 250L || pct >= 100) {
+            lastUiUpdateMs = now;
+            DownloadListener l = listeners.get(gameId);
+            if (l != null) l.onProgress(msg, pct);
+            for (GlobalListener gl : globalListeners) gl.onAnyProgress(gameId, name, msg, pct);
+        }
     }
 
     private void notifyComplete(String gameId, String installDir) {

@@ -155,7 +155,7 @@ public final class BhLuaLaunchHook {
             active.put("started_at", System.currentTimeMillis());
             LuaToolsStore.writeAllBytes(activeLaunchFile(ctx), active.toString().getBytes("UTF-8"));
 
-            // 5. Pull CloudRedirect saves synchronously (bounded 5s so UI never ANRs)
+            // 5. Pull CloudRedirect saves synchronously (bounded 12s for GDrive token refresh + zip pull)
             if (LAUNCH_HOOK_DONE.compareAndSet(false, true)) {
                 final int fAppId = appId;
                 final String fPrefix = prefixDir;
@@ -167,7 +167,7 @@ public final class BhLuaLaunchHook {
                     }
                 }, "bh-lua-presync");
                 syncThread.start();
-                try { syncThread.join(5000L); } catch (InterruptedException ignored) {}
+                try { syncThread.join(12000L); } catch (InterruptedException ignored) {}
             }
             Log.i(TAG, "LuaTools pre-launch ready appId=" + appId + " gameId=" + gameId + " dlls=" + dlls);
         } catch (Throwable t) {
@@ -258,6 +258,14 @@ public final class BhLuaLaunchHook {
         if (gameId != null && gameId.startsWith("lua_")) {
             try {
                 return Integer.parseInt(gameId.substring(4));
+            } catch (NumberFormatException ignored) {}
+        }
+        if (gameId != null && gameId.matches("\\d+")) {
+            try {
+                int parsed = Integer.parseInt(gameId);
+                if (parsed > 0 && LuaToolsJavaSteamHook.get(ctx).isLuaGame(parsed)) {
+                    return parsed;
+                }
             } catch (NumberFormatException ignored) {}
         }
         if (steamAppId > 0) return steamAppId;

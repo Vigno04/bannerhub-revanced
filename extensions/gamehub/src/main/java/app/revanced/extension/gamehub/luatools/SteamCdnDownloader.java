@@ -138,8 +138,13 @@ public final class SteamCdnDownloader {
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final int workerCount = Math.max(1, Math.min(8, threads > 0 ? threads : 4));
 
-        Thread t = new Thread(() -> runDownload(ctx.getApplicationContext(), appId, workerCount, cancelled, cb),
-                "bh-steam-dl-" + appId);
+        Thread t = new Thread(() -> {
+            try {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+            } catch (Throwable ignored) {}
+            runDownload(ctx.getApplicationContext(), appId, workerCount, cancelled, cb);
+        }, "bh-steam-dl-" + appId);
+        t.setPriority(Thread.MIN_PRIORITY);
         t.setDaemon(true);
         t.start();
 
@@ -279,7 +284,20 @@ public final class SteamCdnDownloader {
             final StringBuilder firstError = new StringBuilder();
 
             if (!tasks.isEmpty()) {
-                ExecutorService pool = Executors.newFixedThreadPool(workerCount);
+                final AtomicInteger poolIdx = new AtomicInteger(1);
+                ExecutorService pool = Executors.newFixedThreadPool(workerCount, r -> {
+                    Thread wt = new Thread(() -> {
+                        try {
+                            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+                        } catch (Throwable ignored) {}
+                        r.run();
+                    }, "bh-steam-w-" + poolIdx.getAndIncrement());
+                    wt.setPriority(Thread.MIN_PRIORITY);
+                    wt.setDaemon(true);
+                    return wt;
+                });
+                final AtomicLong lastProgressMs = new AtomicLong(0L);
+                final AtomicInteger lastProgressPct = new AtomicInteger(-1);
                 List<Future<?>> futures = new ArrayList<>(tasks.size());
 
                 for (final ChunkTask task : tasks) {
@@ -298,7 +316,14 @@ public final class SteamCdnDownloader {
                             }
                             long done = downloadedBytes.addAndGet(plain.length);
                             int pct = (int) Math.min(99L, (done * 100L) / totalExpected);
-                            cb.onProgress(formatBytes(done) + " / " + formatBytes(totalExpected), pct);
+                            long now = System.currentTimeMillis();
+                            long prevMs = lastProgressMs.get();
+                            int prevPct = lastProgressPct.get();
+                            if ((now - prevMs >= 400L || (pct > prevPct && now - prevMs >= 150L))
+                                    && lastProgressMs.compareAndSet(prevMs, now)) {
+                                lastProgressPct.set(pct);
+                                cb.onProgress(formatBytes(done) + " / " + formatBytes(totalExpected), pct);
+                            }
                         } catch (Throwable e) {
                             if (!cancelled.get() && failed.compareAndSet(false, true)) {
                                 synchronized (firstError) {
@@ -546,9 +571,16 @@ public final class SteamCdnDownloader {
     private static int steamAdler32(byte[] data, int len) {
         long a = 0;
         long b = 0;
-        for (int i = 0; i < len; i++) {
-            a = (a + (data[i] & 0xFF)) % 65521L;
-            b = (b + a) % 65521L;
+        int i = 0;
+        // Batch modulo every 5552 bytes (zlib NMAX) to avoid per-byte division overhead
+        while (i < len) {
+            int blockEnd = Math.min(len, i + 5552);
+            while (i < blockEnd) {
+                a += data[i++] & 0xFF;
+                b += a;
+            }
+            a %= 65521L;
+            b %= 65521L;
         }
         return (int) (a | (b << 16));
     }
